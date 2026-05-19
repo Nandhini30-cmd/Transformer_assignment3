@@ -21,9 +21,11 @@ assignment3/
 
 Links
 
-Link to WandB Report: WandB Experiment Report
+Link to WandB Report: WandB Experiment Report (https://api.wandb.ai/links/mnandhini312-indian-institute-of-technology-madras/14uyhmvi)
 
-Link to GitHub Repository: Project GitHub Repository
+
+Link to GitHub Repository: [Project GitHub Repository](https://github.com/Nandhini30-cmd/Transformer_assignment3)
+
 
 
 
