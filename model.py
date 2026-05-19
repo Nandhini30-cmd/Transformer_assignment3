@@ -158,18 +158,24 @@ class MultiHeadAttention(nn.Module):
         dropout   (float): Dropout probability applied to attention weights.
     """
 
-    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1) -> None:
+    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1, use_scaling: bool = True) -> None:
         super().__init__()
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
 
         self.d_model   = d_model
         self.num_heads = num_heads
+        self.last_attn = None
         self.d_k       = d_model // num_heads   # depth per head
         self.W_q = nn.Linear(d_model, d_model)
         self.W_k = nn.Linear(d_model, d_model)
         self.W_v = nn.Linear(d_model, d_model)
         self.W_o = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
+        self.use_scaling = use_scaling
+    
+    def _split_heads(self, x, B):
+        # [B, T, d_model] → [B, h, T, d_k]
+        return x.view(B, -1, self.num_heads, self.d_k).transpose(1, 2)
     
     def forward(
         self,
@@ -479,7 +485,7 @@ class Transformer(nn.Module):
     """
 
     def __init__(
-        self,
+        self,src_vocab=None, tgt_vocab=None,
         src_vocab_size: int = 32000,
         tgt_vocab_size: int = 32000,
         d_model:   int   = 512,
@@ -487,6 +493,7 @@ class Transformer(nn.Module):
         num_heads: int   = 8,
         d_ff:      int   = 2048,
         dropout:   float = 0.1,
+        
         checkpoint_path: str = None,
     ) -> None:
         super().__init__()
@@ -505,6 +512,8 @@ class Transformer(nn.Module):
         self.encoder = Encoder(EncoderLayer(d_model, num_heads, d_ff, dropout), N)
         self.decoder = Decoder(DecoderLayer(d_model, num_heads, d_ff, dropout), N)
         self.fc = nn.Linear(d_model, tgt_vocab_size)    
+        self.src_vocab = src_vocab
+        self.tgt_vocab = tgt_vocab
         
     # ── AUTOGRADER HOOKS ── keep these signatures exactly ─────────────
 
@@ -589,27 +598,35 @@ class Transformer(nn.Module):
         Args:
             src_sentence: The raw German text.
             
-            
         Returns:
             The fully translated English string, detokenized and clean.
         """
+        # Load vocabularies from dataset module
+        try:
+            from dataset import src_vocab as loaded_src_vocab, tgt_vocab as loaded_tgt_vocab
+            src_vocab = loaded_src_vocab.vocab
+            tgt_vocab = loaded_tgt_vocab.vocab
+            tgt_vocab_obj = loaded_tgt_vocab
+        except ImportError:
+            raise RuntimeError("Cannot load vocabularies from dataset module")
+        
         self.eval()
         device = next(self.parameters()).device
         tokens = src_sentence.split()
-        src_indices = [self.src_vocab["<sos>"]] + \
-                  [self.src_vocab.get(tok, self.src_vocab["<unk>"]) for tok in tokens] + \
-                  [self.src_vocab["<eos>"]]
+        src_indices = [src_vocab["<sos>"]] + \
+                  [src_vocab.get(tok, src_vocab["<unk>"]) for tok in tokens] + \
+                  [src_vocab["<eos>"]]
 
         src = torch.tensor(src_indices, dtype=torch.long).unsqueeze(0).to(device)
 
         # Create source mask 
         src_mask = make_src_mask(src).to(device)
 
-        #Encode 
+        # Encode 
         memory = self.encode(src, src_mask)
 
         with torch.no_grad():
-            tgt_indices = [self.tgt_vocab["<sos>"]]
+            tgt_indices = [tgt_vocab["<sos>"]]
 
             for step in range(50):
 
@@ -618,25 +635,21 @@ class Transformer(nn.Module):
 
                 out = self.decode(memory, src_mask, tgt, tgt_mask)
 
-                out = self.decode(memory, src_mask, tgt, tgt_mask)
-
                 next_token = torch.argmax(out[:, -1, :], dim=-1).item()
 
                 tgt_indices.append(next_token)
 
-                
-                if next_token == self.tgt_vocab["<eos>"]:
+                if next_token == tgt_vocab["<eos>"]:
                     break
 
-                
+                # Break if repeating same token
                 if step > 2 and len(set(tgt_indices[-3:])) == 1:
                     break
 
-        inv_vocab = {v: k for k, v in self.tgt_vocab.items()}
-
+        # Convert indices back to words
         words = []
         for idx in tgt_indices:
-            word = inv_vocab.get(idx, None)
+            word = tgt_vocab_obj.lookup_token(idx)
             if word and word not in ["<sos>", "<eos>", "<pad>"]:
                 words.append(word)
 
