@@ -64,13 +64,14 @@ def scaled_dot_product_attention(
     # scale
     scores = scores / math.sqrt(d_k)
 
-    # apply mask (True → masked out)
+    # apply mask (True → masked out). Use a large negative value
+    # so softmax assigns ~0 probability to masked positions.
     if mask is not None:
-        scores = scores.masked_fill(mask, float('-inf'))
+        scores = scores.masked_fill(mask, -1e9)
 
-    # softmax
+    # softmax (over keys) — sums to 1 along last dim
     attn_w = torch.softmax(scores, dim=-1)
-    attn_w = F.dropout(attn_w, p=0.1)
+
     # multiply with V
     output = torch.matmul(attn_w, V)
 
