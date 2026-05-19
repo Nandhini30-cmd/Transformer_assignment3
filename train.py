@@ -342,7 +342,9 @@ def save_checkpoint(
             'num_heads': model.num_heads,
             'd_ff': model.d_ff,
             'dropout': model.dropout_rate,
-    }
+    },
+    'src_vocab': getattr(model, 'src_vocab', None),
+    'tgt_vocab': getattr(model, 'tgt_vocab', None),
     }, path)
 
 
@@ -366,13 +368,19 @@ def load_checkpoint(
 
     """
     # TODO: implement restore logic
-    checkpoint = torch.load(path)   
+    checkpoint = torch.load(path)
     model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     if scheduler is not None and checkpoint['scheduler_state_dict'] is not None:
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+
+    if 'src_vocab' in checkpoint and checkpoint['src_vocab'] is not None:
+        model.src_vocab = checkpoint['src_vocab']
+
+    if 'tgt_vocab' in checkpoint and checkpoint['tgt_vocab'] is not None:
+        model.tgt_vocab = checkpoint['tgt_vocab']
 
     return checkpoint['epoch']
 # ══════════════════════════════════════════════════════════════════════
@@ -433,7 +441,7 @@ def parse_args():
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-4,
+        default=1.0,
         help="Base learning rate (default: 1e-4)"
     )
     parser.add_argument(
@@ -572,6 +580,10 @@ def run_training_experiment(args=None) -> None:
         d_ff=config["d_ff"],
         dropout=config["dropout"],
     ).to(device)
+
+    # Attach vocabularies to the model for inference and checkpointing
+    model.src_vocab = src_vocab.vocab
+    model.tgt_vocab = tgt_vocab.vocab
 
     # Optimizer
     optimizer = optim.Adam(

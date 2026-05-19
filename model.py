@@ -158,24 +158,18 @@ class MultiHeadAttention(nn.Module):
         dropout   (float): Dropout probability applied to attention weights.
     """
 
-    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1, use_scaling: bool = True) -> None:
+    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1) -> None:
         super().__init__()
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
 
         self.d_model   = d_model
         self.num_heads = num_heads
-        self.last_attn = None
         self.d_k       = d_model // num_heads   # depth per head
         self.W_q = nn.Linear(d_model, d_model)
         self.W_k = nn.Linear(d_model, d_model)
         self.W_v = nn.Linear(d_model, d_model)
         self.W_o = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
-        self.use_scaling = use_scaling
-    
-    def _split_heads(self, x, B):
-        # [B, T, d_model] → [B, h, T, d_k]
-        return x.view(B, -1, self.num_heads, self.d_k).transpose(1, 2)
     
     def forward(
         self,
@@ -485,7 +479,7 @@ class Transformer(nn.Module):
     """
 
     def __init__(
-        self,src_vocab=None, tgt_vocab=None,
+        self,
         src_vocab_size: int = 32000,
         tgt_vocab_size: int = 32000,
         d_model:   int   = 512,
@@ -493,8 +487,9 @@ class Transformer(nn.Module):
         num_heads: int   = 8,
         d_ff:      int   = 2048,
         dropout:   float = 0.1,
-        
         checkpoint_path: str = None,
+        src_vocab: Optional[dict] = None,
+        tgt_vocab: Optional[dict] = None,
     ) -> None:
         super().__init__()
         # TODO: Instantiate 
@@ -511,9 +506,19 @@ class Transformer(nn.Module):
         self.positional_encoding = PositionalEncoding(d_model, dropout)
         self.encoder = Encoder(EncoderLayer(d_model, num_heads, d_ff, dropout), N)
         self.decoder = Decoder(DecoderLayer(d_model, num_heads, d_ff, dropout), N)
-        self.fc = nn.Linear(d_model, tgt_vocab_size)    
-        self.src_vocab = src_vocab
-        self.tgt_vocab = tgt_vocab
+        self.fc = nn.Linear(d_model, tgt_vocab_size)
+        self.src_vocab = src_vocab if src_vocab is not None else {
+            "<unk>": 0,
+            "<pad>": 1,
+            "<sos>": 2,
+            "<eos>": 3,
+        }
+        self.tgt_vocab = tgt_vocab if tgt_vocab is not None else {
+            "<unk>": 0,
+            "<pad>": 1,
+            "<sos>": 2,
+            "<eos>": 3,
+        }
         
     # ── AUTOGRADER HOOKS ── keep these signatures exactly ─────────────
 
@@ -601,56 +606,46 @@ class Transformer(nn.Module):
         Returns:
             The fully translated English string, detokenized and clean.
         """
-        # Load vocabularies from dataset module
-        try:
-            from dataset import src_vocab as loaded_src_vocab, tgt_vocab as loaded_tgt_vocab
-            src_vocab = loaded_src_vocab.vocab
-            tgt_vocab = loaded_tgt_vocab.vocab
-            tgt_vocab_obj = loaded_tgt_vocab
-        except ImportError:
-            raise RuntimeError("Cannot load vocabularies from dataset module")
-        
         self.eval()
         device = next(self.parameters()).device
         tokens = src_sentence.split()
-        src_indices = [src_vocab["<sos>"]] + \
-                  [src_vocab.get(tok, src_vocab["<unk>"]) for tok in tokens] + \
-                  [src_vocab["<eos>"]]
+
+        src_indices = [self.src_vocab["<sos>"]] + [
+            self.src_vocab.get(tok, self.src_vocab["<unk>"])
+            for tok in tokens
+        ] + [self.src_vocab["<eos>"]]
 
         src = torch.tensor(src_indices, dtype=torch.long).unsqueeze(0).to(device)
 
-        # Create source mask 
+        # Create source mask
         src_mask = make_src_mask(src).to(device)
 
-        # Encode 
+        # Encode
         memory = self.encode(src, src_mask)
 
         with torch.no_grad():
-            tgt_indices = [tgt_vocab["<sos>"]]
+            tgt_indices = [self.tgt_vocab["<sos>"]]
 
             for step in range(50):
-
                 tgt = torch.tensor(tgt_indices, dtype=torch.long).unsqueeze(0).to(device)
                 tgt_mask = make_tgt_mask(tgt).to(device)
 
                 out = self.decode(memory, src_mask, tgt, tgt_mask)
 
                 next_token = torch.argmax(out[:, -1, :], dim=-1).item()
-
                 tgt_indices.append(next_token)
 
-                if next_token == tgt_vocab["<eos>"]:
+                if next_token == self.tgt_vocab["<eos>"]:
                     break
 
-                # Break if repeating same token
                 if step > 2 and len(set(tgt_indices[-3:])) == 1:
                     break
 
-        # Convert indices back to words
-        words = []
-        for idx in tgt_indices:
-            word = tgt_vocab_obj.lookup_token(idx)
-            if word and word not in ["<sos>", "<eos>", "<pad>"]:
-                words.append(word)
+        inv_tgt_vocab = {v: k for k, v in self.tgt_vocab.items()}
+        words = [
+            inv_tgt_vocab.get(idx, "<unk>")
+            for idx in tgt_indices
+            if inv_tgt_vocab.get(idx, "<unk>") not in ["<sos>", "<eos>", "<pad>"]
+        ]
 
         return " ".join(words)
