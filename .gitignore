@@ -1,0 +1,16 @@
+dsa3_env/
+wandb/
+__pycache__/
+.ipynb_checkpoints/
+
+*.pt
+*.pth
+
+*.zip
+*.tar
+*.gz
+
+data/
+datasets/
+.cache/
+.vscode/
